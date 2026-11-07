@@ -1,0 +1,193 @@
+C51 COMPILER V9.60.7.0   SYSTEM                                                            07/02/2026 22:24:19 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE SYSTEM
+OBJECT MODULE PLACED IN .\Objects\system.obj
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE system.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\sy
+                    -stem.lst) TABS(2) OBJECT(.\Objects\system.obj)
+
+line level    source
+
+   1          #include <REG51.H>
+   2          
+   3          /* ============================================================
+   4             SYSTEM MODULE - Header
+   5             ============================================================ */
+   6          
+   7          #define WARNING_TEMP 70
+   8          #define CRITICAL_TEMP 85
+   9          #define RELAY_ON 1
+  10          #define RELAY_OFF 0
+  11          
+  12          sbit RELAY = P2^3;      // Green LED (Machine Running)
+  13          sbit LED = P2^4;        // Red LED (Warning)
+  14          sbit BUZZER = P2^5;     // Buzzer
+  15          
+  16          unsigned int temperature = 0;
+  17          unsigned char system_state = 0;
+  18          unsigned int blink_timer = 0;
+  19          unsigned char current_mode = 0;
+  20          
+  21          void safe_operation(void);
+  22          void warning_operation(void);
+  23          void critical_operation(void);
+  24          void update_lcd(void);
+  25          void show_welcome(void);
+  26          
+  27          /* ============================================================
+  28             SYSTEM MODULE - Implementation
+  29             ============================================================ */
+  30          
+  31          // External references - LCD functions
+  32          extern void lcd_init(void);
+  33          extern void lcd_clear(void);
+  34          extern void lcd_cmd(unsigned char cmd);
+  35          extern void lcd_data(unsigned char dat);
+  36          extern void lcd_string(char *str);
+  37          extern void display_temperature(unsigned int temp);
+  38          extern void display_number(unsigned char num);
+  39          
+  40          // External references - RTC functions
+  41          extern void rtc_read_time(unsigned char *hours, unsigned char *minutes, unsigned char *seconds);
+  42          extern void rtc_read_date(unsigned char *day, unsigned char *month, unsigned char *year);
+  43          
+  44          void delay_sys(unsigned int ms)
+  45          {
+  46   1          unsigned int i, j;
+  47   1          for(i = 0; i < ms; i++)
+  48   1              for(j = 0; j < 1275; j++);
+  49   1      }
+  50          
+  51          void safe_operation(void)
+  52          {
+  53   1          system_state = 0;
+  54   1          LED = 0;
+C51 COMPILER V9.60.7.0   SYSTEM                                                            07/02/2026 22:24:19 PAGE 2   
+
+  55   1          BUZZER = 0;
+  56   1          RELAY = RELAY_ON;
+  57   1      }
+  58          
+  59          void warning_operation(void)
+  60          {
+  61   1          system_state = 1;
+  62   1          RELAY = RELAY_ON;
+  63   1          
+  64   1          blink_timer++;
+  65   1          if(blink_timer % 10 < 5)
+  66   1          {
+  67   2              LED = 1;
+  68   2              BUZZER = 1;
+  69   2          }
+  70   1          else
+  71   1          {
+  72   2              LED = 0;
+  73   2              BUZZER = 0;
+  74   2          }
+  75   1      }
+  76          
+  77          void critical_operation(void)
+  78          {
+  79   1          system_state = 2;
+  80   1          RELAY = RELAY_OFF;
+  81   1          
+  82   1          blink_timer++;
+  83   1          if(blink_timer % 4 < 2)
+  84   1          {
+  85   2              LED = 1;
+  86   2              BUZZER = 1;
+  87   2          }
+  88   1          else
+  89   1          {
+  90   2              LED = 0;
+  91   2              BUZZER = 0;
+  92   2          }
+  93   1      }
+  94          
+  95          void update_lcd(void)
+  96          {
+  97   1          if(current_mode == 0)
+  98   1          {
+  99   2              lcd_cmd(0x80);
+ 100   2              lcd_string("TEMP: ");
+ 101   2              display_temperature(temperature);
+ 102   2              lcd_data(223);
+ 103   2              lcd_data('C');
+ 104   2              lcd_string("   ");
+ 105   2              
+ 106   2              lcd_cmd(0xC0);
+ 107   2              if(system_state == 0)
+ 108   2                  lcd_string("STATUS: SAFE     ");
+ 109   2              else if(system_state == 1)
+ 110   2                  lcd_string("STATUS: WARNING  ");
+ 111   2              else
+ 112   2                  lcd_string("STATUS: SHUTDOWN ");
+ 113   2          }
+ 114   1      }
+ 115          
+ 116          void show_welcome(void)
+C51 COMPILER V9.60.7.0   SYSTEM                                                            07/02/2026 22:24:19 PAGE 3   
+
+ 117          {
+ 118   1          unsigned char hours, minutes, seconds;
+ 119   1          unsigned char day, month, year;
+ 120   1          
+ 121   1          lcd_clear();
+ 122   1          lcd_cmd(0x80);
+ 123   1          lcd_string("Overheat System");
+ 124   1          lcd_cmd(0xC0);
+ 125   1          lcd_string("v5.0 Ready...");
+ 126   1          delay_sys(1500);
+ 127   1          lcd_clear();
+ 128   1          
+ 129   1          rtc_read_time(&hours, &minutes, &seconds);
+ 130   1          rtc_read_date(&day, &month, &year);
+ 131   1          
+ 132   1          lcd_cmd(0x80);
+ 133   1          lcd_string("Time: ");
+ 134   1          display_number(hours);
+ 135   1          lcd_data(':');
+ 136   1          display_number(minutes);
+ 137   1          lcd_data(':');
+ 138   1          display_number(seconds);
+ 139   1          
+ 140   1          lcd_cmd(0xC0);
+ 141   1          lcd_string("Date: ");
+ 142   1          display_number(day);
+ 143   1          lcd_data('/');
+ 144   1          display_number(month);
+ 145   1          lcd_data('/');
+ 146   1          lcd_data('2');
+ 147   1          lcd_data('0');
+ 148   1          display_number(year);
+ 149   1          delay_sys(2000);
+ 150   1          lcd_clear();
+ 151   1          
+ 152   1          lcd_cmd(0x80);
+ 153   1          lcd_string("W:");
+ 154   1          display_temperature(WARNING_TEMP);
+ 155   1          lcd_data(223);
+ 156   1          lcd_data('C');
+ 157   1          lcd_string(" C:");
+ 158   1          display_temperature(CRITICAL_TEMP);
+ 159   1          lcd_data(223);
+ 160   1          lcd_data('C');
+ 161   1          lcd_cmd(0xC0);
+ 162   1          lcd_string("Hold VIEW for logs");
+ 163   1          delay_sys(1500);
+ 164   1          lcd_clear();
+ 165   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    473    ----
+   CONSTANT SIZE    =    135    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =      6       6
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

@@ -1,0 +1,219 @@
+C51 COMPILER V9.60.7.0   EVENTS                                                            07/02/2026 22:24:19 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE EVENTS
+OBJECT MODULE PLACED IN .\Objects\events.obj
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE events.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\ev
+                    -ents.lst) TABS(2) OBJECT(.\Objects\events.obj)
+
+line level    source
+
+   1          #include <REG51.H>
+   2          
+   3          /* ============================================================
+   4             EVENTS MODULE - Header
+   5             ============================================================ */
+   6          
+   7          sbit BTN_VIEW = P3^3;
+   8          
+   9          unsigned char event_count = 0;
+  10          unsigned char display_events_active = 0;
+  11          
+  12          void log_event(unsigned int temp, unsigned char state);
+  13          void display_events(void);
+  14          
+  15          /* ============================================================
+  16             EVENTS MODULE - Implementation
+  17             ============================================================ */
+  18          
+  19          // External references - LCD functions
+  20          extern void lcd_clear(void);
+  21          extern void lcd_cmd(unsigned char cmd);
+  22          extern void lcd_string(char *str);
+  23          extern void lcd_data(unsigned char dat);
+  24          extern void display_temperature(unsigned int temp);
+  25          extern void display_number(unsigned char num);
+  26          
+  27          // External references - RTC functions
+  28          extern void rtc_read_time(unsigned char *hours, unsigned char *minutes, unsigned char *seconds);
+  29          extern void rtc_read_date(unsigned char *day, unsigned char *month, unsigned char *year);
+  30          
+  31          // External references - EEPROM functions
+  32          extern unsigned char eeprom_read(unsigned int addr);
+  33          extern void eeprom_write(unsigned int addr, unsigned char dat);
+  34          
+  35          void delay_evt(unsigned int ms)
+  36          {
+  37   1          unsigned int i, j;
+  38   1          for(i = 0; i < ms; i++)
+  39   1              for(j = 0; j < 1275; j++);
+  40   1      }
+  41          
+  42          void log_event(unsigned int temp, unsigned char state)
+  43          {
+  44   1          unsigned int addr;
+  45   1          unsigned char hours, minutes, seconds;
+  46   1          unsigned char day, month, year;
+  47   1          unsigned char count;
+  48   1          
+  49   1          rtc_read_time(&hours, &minutes, &seconds);
+  50   1          rtc_read_date(&day, &month, &year);
+  51   1          
+  52   1          count = eeprom_read(0x0000);
+  53   1          event_count = count;
+  54   1          
+C51 COMPILER V9.60.7.0   EVENTS                                                            07/02/2026 22:24:19 PAGE 2   
+
+  55   1          addr = 0x0010 + (count * 8);
+  56   1          
+  57   1          if(count >= 62)
+  58   1          {
+  59   2              count = 0;
+  60   2              addr = 0x0010;
+  61   2          }
+  62   1          
+  63   1          eeprom_write(addr, (unsigned char)(temp & 0xFF));
+  64   1          eeprom_write(addr + 1, (unsigned char)(temp >> 8));
+  65   1          eeprom_write(addr + 2, state);
+  66   1          eeprom_write(addr + 3, seconds);
+  67   1          eeprom_write(addr + 4, minutes);
+  68   1          eeprom_write(addr + 5, hours);
+  69   1          eeprom_write(addr + 6, day);
+  70   1          eeprom_write(addr + 7, month);
+  71   1          
+  72   1          count++;
+  73   1          eeprom_write(0x0000, count);
+  74   1          event_count = count;
+  75   1      }
+  76          
+  77          void display_events(void)
+  78          {
+  79   1          unsigned char count, state, s, m, h, d, mo;
+  80   1          unsigned int addr, temp;
+  81   1          unsigned char idx;
+  82   1          unsigned int timer;
+  83   1          unsigned char temp_low, temp_high;
+  84   1          unsigned char yr = 26;
+  85   1          
+  86   1          count = eeprom_read(0x0000);
+  87   1          
+  88   1          lcd_clear();
+  89   1          lcd_cmd(0x80);
+  90   1          lcd_string("<<< LOGS MODE >>>");
+  91   1          lcd_cmd(0xC0);
+  92   1          lcd_string("Hold to view logs");
+  93   1          delay_evt(1500);
+  94   1          
+  95   1          if(count == 0)
+  96   1          {
+  97   2              lcd_clear();
+  98   2              lcd_cmd(0x80);
+  99   2              lcd_string("No Events Logged");
+ 100   2              lcd_cmd(0xC0);
+ 101   2              lcd_string("Release to exit");
+ 102   2              
+ 103   2              while(BTN_VIEW == 0)
+ 104   2                  delay_evt(10);
+ 105   2              return;
+ 106   2          }
+ 107   1          
+ 108   1          lcd_clear();
+ 109   1          lcd_cmd(0x80);
+ 110   1          lcd_string("Total Events: ");
+ 111   1          display_number(count);
+ 112   1          lcd_cmd(0xC0);
+ 113   1          lcd_string("Hold to view logs");
+ 114   1          delay_evt(1500);
+ 115   1          
+ 116   1          if(BTN_VIEW == 1)
+C51 COMPILER V9.60.7.0   EVENTS                                                            07/02/2026 22:24:19 PAGE 3   
+
+ 117   1              return;
+ 118   1          
+ 119   1          idx = 0;
+ 120   1          display_events_active = 1;
+ 121   1          
+ 122   1          while(display_events_active)
+ 123   1          {
+ 124   2              if(BTN_VIEW == 1)
+ 125   2              {
+ 126   3                  display_events_active = 0;
+ 127   3                  break;
+ 128   3              }
+ 129   2              
+ 130   2              addr = 0x0010 + ((count - 1 - idx) * 8);
+ 131   2              
+ 132   2              temp_low = eeprom_read(addr);
+ 133   2              temp_high = eeprom_read(addr + 1);
+ 134   2              temp = (temp_high << 8) | temp_low;
+ 135   2              state = eeprom_read(addr + 2);
+ 136   2              s = eeprom_read(addr + 3);
+ 137   2              m = eeprom_read(addr + 4);
+ 138   2              h = eeprom_read(addr + 5);
+ 139   2              d = eeprom_read(addr + 6);
+ 140   2              mo = eeprom_read(addr + 7);
+ 141   2              
+ 142   2              lcd_clear();
+ 143   2              
+ 144   2              lcd_cmd(0x80);
+ 145   2              lcd_string("#");
+ 146   2              display_number(idx + 1);
+ 147   2              lcd_string(": ");
+ 148   2              lcd_string("TEMP:");
+ 149   2              display_temperature(temp);
+ 150   2              lcd_data(223);
+ 151   2              lcd_data('C');
+ 152   2              lcd_string(" ");
+ 153   2              
+ 154   2              if(state == 0) lcd_string("SAFE");
+ 155   2              else if(state == 1) lcd_string("WARN");
+ 156   2              else lcd_string("STOP");
+ 157   2              
+ 158   2              lcd_cmd(0xC0);
+ 159   2              lcd_string("T:");
+ 160   2              display_number(h);
+ 161   2              lcd_data(':');
+ 162   2              display_number(m);
+ 163   2              lcd_string(" D:");
+ 164   2              display_number(d);
+ 165   2              lcd_data('/');
+ 166   2              display_number(mo);
+ 167   2              lcd_data('/');
+ 168   2              lcd_data('2');
+ 169   2              lcd_data('0');
+ 170   2              display_number(yr);
+ 171   2              
+ 172   2              timer = 0;
+ 173   2              while(timer < 3000)
+ 174   2              {
+ 175   3                  delay_evt(10);
+ 176   3                  timer += 10;
+ 177   3                  
+ 178   3                  if(BTN_VIEW == 1)
+C51 COMPILER V9.60.7.0   EVENTS                                                            07/02/2026 22:24:19 PAGE 4   
+
+ 179   3                  {
+ 180   4                      display_events_active = 0;
+ 181   4                      break;
+ 182   4                  }
+ 183   3              }
+ 184   2              
+ 185   2              idx++;
+ 186   2              if(idx >= count)
+ 187   2                  idx = 0;
+ 188   2          }
+ 189   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    793    ----
+   CONSTANT SIZE    =    119    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =      2      26
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

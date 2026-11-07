@@ -1,0 +1,152 @@
+C51 COMPILER V9.60.7.0   EEPROM                                                            07/02/2026 22:24:19 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE EEPROM
+OBJECT MODULE PLACED IN .\Objects\eeprom.obj
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE eeprom.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\ee
+                    -prom.lst) TABS(2) OBJECT(.\Objects\eeprom.obj)
+
+line level    source
+
+   1          #include <REG51.H>
+   2          
+   3          /* ============================================================
+   4             EEPROM MODULE - Header (24C04)
+   5             ============================================================ */
+   6          
+   7          #define EEPROM_ADDR_WRITE 0xA0
+   8          #define EEPROM_ADDR_READ 0xA1
+   9          
+  10          void eeprom_write(unsigned int addr, unsigned char dat);
+  11          unsigned char eeprom_read(unsigned int addr);
+  12          
+  13          /* ============================================================
+  14             EEPROM MODULE - Implementation
+  15             ============================================================ */
+  16          
+  17          // External references - I2C functions
+  18          extern void i2c_start(void);
+  19          extern void i2c_stop(void);
+  20          extern unsigned char i2c_write(unsigned char dat);
+  21          extern unsigned char i2c_read(unsigned char ack);
+  22          
+  23          void delay_eeprom(unsigned int ms)
+  24          {
+  25   1          unsigned int i, j;
+  26   1          for(i = 0; i < ms; i++)
+  27   1              for(j = 0; j < 1275; j++);
+  28   1      }
+  29          
+  30          void eeprom_write(unsigned int addr, unsigned char dat)
+  31          {
+  32   1          unsigned char error;
+  33   1          unsigned char retry = 0;
+  34   1          
+  35   1          do {
+  36   2              i2c_start();
+  37   2              error = i2c_write(EEPROM_ADDR_WRITE);
+  38   2              if(error) {
+  39   3                  i2c_stop();
+  40   3                  delay_eeprom(1);
+  41   3                  retry++;
+  42   3                  continue;
+  43   3              }
+  44   2              
+  45   2              error = i2c_write((unsigned char)(addr >> 8));
+  46   2              if(error) {
+  47   3                  i2c_stop();
+  48   3                  delay_eeprom(1);
+  49   3                  retry++;
+  50   3                  continue;
+  51   3              }
+  52   2              
+  53   2              error = i2c_write((unsigned char)(addr & 0xFF));
+  54   2              if(error) {
+C51 COMPILER V9.60.7.0   EEPROM                                                            07/02/2026 22:24:19 PAGE 2   
+
+  55   3                  i2c_stop();
+  56   3                  delay_eeprom(1);
+  57   3                  retry++;
+  58   3                  continue;
+  59   3              }
+  60   2              
+  61   2              error = i2c_write(dat);
+  62   2              if(error) {
+  63   3                  i2c_stop();
+  64   3                  delay_eeprom(1);
+  65   3                  retry++;
+  66   3                  continue;
+  67   3              }
+  68   2              
+  69   2              i2c_stop();
+  70   2              delay_eeprom(5);
+  71   2              break;
+  72   2              
+  73   2          } while(retry < 3);
+  74   1      }
+  75          
+  76          unsigned char eeprom_read(unsigned int addr)
+  77          {
+  78   1          unsigned char dat = 0xFF;
+  79   1          unsigned char error;
+  80   1          unsigned char retry = 0;
+  81   1          
+  82   1          do {
+  83   2              i2c_start();
+  84   2              error = i2c_write(EEPROM_ADDR_WRITE);
+  85   2              if(error) {
+  86   3                  i2c_stop();
+  87   3                  delay_eeprom(1);
+  88   3                  retry++;
+  89   3                  continue;
+  90   3              }
+  91   2              
+  92   2              error = i2c_write((unsigned char)(addr >> 8));
+  93   2              if(error) {
+  94   3                  i2c_stop();
+  95   3                  delay_eeprom(1);
+  96   3                  retry++;
+  97   3                  continue;
+  98   3              }
+  99   2              
+ 100   2              error = i2c_write((unsigned char)(addr & 0xFF));
+ 101   2              if(error) {
+ 102   3                  i2c_stop();
+ 103   3                  delay_eeprom(1);
+ 104   3                  retry++;
+ 105   3                  continue;
+ 106   3              }
+ 107   2              
+ 108   2              i2c_start();
+ 109   2              error = i2c_write(EEPROM_ADDR_READ);
+ 110   2              if(error) {
+ 111   3                  i2c_stop();
+ 112   3                  delay_eeprom(1);
+ 113   3                  retry++;
+ 114   3                  continue;
+ 115   3              }
+ 116   2              
+C51 COMPILER V9.60.7.0   EEPROM                                                            07/02/2026 22:24:19 PAGE 3   
+
+ 117   2              dat = i2c_read(0);
+ 118   2              i2c_stop();
+ 119   2              break;
+ 120   2              
+ 121   2          } while(retry < 3);
+ 122   1          
+ 123   1          return dat;
+ 124   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    234    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----      10
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

@@ -1,0 +1,855 @@
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN .\Objects\main.obj
+COMPILER INVOKED BY: C:\Keil_v5\C51\BIN\C51.EXE main.c OPTIMIZE(8,SPEED) BROWSE DEBUG OBJECTEXTEND PRINT(.\Listings\main
+                    -.lst) TABS(2) OBJECT(.\Objects\main.obj)
+
+line level    source
+
+   1          #include <REG51.H>
+   2          #include <string.h>
+   3          
+   4          /* ============================================================
+   5             PIN DEFINITIONS
+   6             ============================================================ */
+   7          
+   8          #define LCD P1
+   9          
+  10          sbit RS = P3^0;
+  11          sbit RW = P3^1;
+  12          sbit EN = P3^2;
+  13          sbit ADC_RD = P2^0;
+  14          sbit ADC_WR = P2^1;
+  15          sbit INTR = P2^2;
+  16          sbit RELAY = P2^3;      // Green LED (Machine Running)
+  17          sbit LED = P2^4;        // Red LED (Warning)
+  18          sbit BUZZER = P2^5;     // Buzzer
+  19          sbit SDA = P2^6;
+  20          sbit SCL = P2^7;
+  21          sbit BTN_VIEW = P3^3;
+  22          
+  23          /* ============================================================
+  24             CONSTANTS
+  25             ============================================================ */
+  26          
+  27          #define WARNING_TEMP 70
+  28          #define CRITICAL_TEMP 85
+  29          #define RELAY_ON 1
+  30          #define RELAY_OFF 0
+  31          
+  32          #define EEPROM_ADDR_WRITE 0xA0
+  33          #define EEPROM_ADDR_READ 0xA1
+  34          #define RTC_ADDR_WRITE 0xD0
+  35          #define RTC_ADDR_READ 0xD1
+  36          
+  37          /* ============================================================
+  38             GLOBAL VARIABLES
+  39             ============================================================ */
+  40          
+  41          unsigned int temperature = 0;
+  42          unsigned char system_state = 0;
+  43          unsigned int blink_timer = 0;
+  44          unsigned char event_count = 0;
+  45          unsigned char current_mode = 0;
+  46          unsigned char button_was_pressed = 0;
+  47          unsigned char display_events_active = 0;
+  48          
+  49          /* ============================================================
+  50             DELAY FUNCTIONS
+  51             ============================================================ */
+  52          
+  53          void delay(unsigned int ms)
+  54          {
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 2   
+
+  55   1          unsigned int i, j;
+  56   1          for(i = 0; i < ms; i++)
+  57   1              for(j = 0; j < 1275; j++);
+  58   1      }
+  59          
+  60          void delay_us(unsigned int us)
+  61          {
+  62   1          unsigned int i;
+  63   1          for(i = 0; i < us; i++);
+  64   1      }
+  65          
+  66          /* ============================================================
+  67             LCD FUNCTIONS
+  68             ============================================================ */
+  69          
+  70          void lcd_cmd(unsigned char cmd)
+  71          {
+  72   1          LCD = cmd;
+  73   1          RS = 0;
+  74   1          RW = 0;
+  75   1          EN = 1;
+  76   1          delay(1);
+  77   1          EN = 0;
+  78   1      }
+  79          
+  80          void lcd_data(unsigned char dat)
+  81          {
+  82   1          LCD = dat;
+  83   1          RS = 1;
+  84   1          RW = 0;
+  85   1          EN = 1;
+  86   1          delay(1);
+  87   1          EN = 0;
+  88   1      }
+  89          
+  90          void lcd_string(char *str)
+  91          {
+  92   1          while(*str)
+  93   1              lcd_data(*str++);
+  94   1      }
+  95          
+  96          void lcd_init(void)
+  97          {
+  98   1          lcd_cmd(0x38);
+  99   1          lcd_cmd(0x0C);
+ 100   1          lcd_cmd(0x06);
+ 101   1          lcd_cmd(0x01);
+ 102   1          delay(10);
+ 103   1      }
+ 104          
+ 105          void lcd_clear(void)
+ 106          {
+ 107   1          lcd_cmd(0x01);
+ 108   1          delay(2);
+ 109   1      }
+ 110          
+ 111          void display_temperature(unsigned int temp)
+ 112          {
+ 113   1          if(temp / 100 == 0)
+ 114   1              lcd_data(' ');
+ 115   1          else
+ 116   1              lcd_data((temp / 100) + '0');
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 3   
+
+ 117   1          lcd_data(((temp / 10) % 10) + '0');
+ 118   1          lcd_data((temp % 10) + '0');
+ 119   1      }
+ 120          
+ 121          void display_number(unsigned char num)
+ 122          {
+ 123   1          lcd_data((num / 10) + '0');
+ 124   1          lcd_data((num % 10) + '0');
+ 125   1      }
+ 126          
+ 127          /* ============================================================
+ 128             ADC FUNCTIONS
+ 129             ============================================================ */
+ 130          
+ 131          unsigned char ADC_Read(void)
+ 132          {
+ 133   1          unsigned char adc_value;
+ 134   1          unsigned int timeout = 0;
+ 135   1      
+ 136   1          P0 = 0xFF;
+ 137   1          ADC_WR = 0;
+ 138   1          delay(1);
+ 139   1          ADC_WR = 1;
+ 140   1      
+ 141   1          while(INTR == 1 && timeout < 10000)
+ 142   1              timeout++;
+ 143   1      
+ 144   1          ADC_RD = 0;
+ 145   1          delay(1);
+ 146   1          adc_value = P0;
+ 147   1          ADC_RD = 1;
+ 148   1      
+ 149   1          return adc_value;
+ 150   1      }
+ 151          
+ 152          /* ============================================================
+ 153             I2C FUNCTIONS
+ 154             ============================================================ */
+ 155          
+ 156          void i2c_start(void)
+ 157          {
+ 158   1          SDA = 1;
+ 159   1          SCL = 1;
+ 160   1          delay_us(5);
+ 161   1          SDA = 0;
+ 162   1          delay_us(5);
+ 163   1          SCL = 0;
+ 164   1      }
+ 165          
+ 166          void i2c_stop(void)
+ 167          {
+ 168   1          SDA = 0;
+ 169   1          SCL = 1;
+ 170   1          delay_us(5);
+ 171   1          SDA = 1;
+ 172   1          delay_us(5);
+ 173   1      }
+ 174          
+ 175          unsigned char i2c_write(unsigned char dat)
+ 176          {
+ 177   1          unsigned char i, ack;
+ 178   1          
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 4   
+
+ 179   1          for(i = 0; i < 8; i++)
+ 180   1          {
+ 181   2              SDA = (dat & 0x80) ? 1 : 0;
+ 182   2              dat <<= 1;
+ 183   2              SCL = 1;
+ 184   2              delay_us(5);
+ 185   2              SCL = 0;
+ 186   2              delay_us(5);
+ 187   2          }
+ 188   1          
+ 189   1          SDA = 1;
+ 190   1          SCL = 1;
+ 191   1          delay_us(5);
+ 192   1          ack = SDA;
+ 193   1          SCL = 0;
+ 194   1          
+ 195   1          return ack;
+ 196   1      }
+ 197          
+ 198          unsigned char i2c_read(unsigned char ack)
+ 199          {
+ 200   1          unsigned char i, dat = 0;
+ 201   1          
+ 202   1          SDA = 1;
+ 203   1          
+ 204   1          for(i = 0; i < 8; i++)
+ 205   1          {
+ 206   2              dat <<= 1;
+ 207   2              SCL = 1;
+ 208   2              delay_us(5);
+ 209   2              if(SDA) dat |= 0x01;
+ 210   2              SCL = 0;
+ 211   2              delay_us(5);
+ 212   2          }
+ 213   1          
+ 214   1          SDA = ack ? 0 : 1;
+ 215   1          SCL = 1;
+ 216   1          delay_us(5);
+ 217   1          SCL = 0;
+ 218   1          SDA = 1;
+ 219   1          
+ 220   1          return dat;
+ 221   1      }
+ 222          
+ 223          /* ============================================================
+ 224             EEPROM FUNCTIONS (24C04)
+ 225             ============================================================ */
+ 226          
+ 227          void eeprom_write(unsigned int addr, unsigned char dat)
+ 228          {
+ 229   1          unsigned char error;
+ 230   1          unsigned char retry = 0;
+ 231   1          
+ 232   1          do {
+ 233   2              i2c_start();
+ 234   2              error = i2c_write(EEPROM_ADDR_WRITE);
+ 235   2              if(error) {
+ 236   3                  i2c_stop();
+ 237   3                  delay(1);
+ 238   3                  retry++;
+ 239   3                  continue;
+ 240   3              }
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 5   
+
+ 241   2              
+ 242   2              error = i2c_write((unsigned char)(addr >> 8));
+ 243   2              if(error) {
+ 244   3                  i2c_stop();
+ 245   3                  delay(1);
+ 246   3                  retry++;
+ 247   3                  continue;
+ 248   3              }
+ 249   2              
+ 250   2              error = i2c_write((unsigned char)(addr & 0xFF));
+ 251   2              if(error) {
+ 252   3                  i2c_stop();
+ 253   3                  delay(1);
+ 254   3                  retry++;
+ 255   3                  continue;
+ 256   3              }
+ 257   2              
+ 258   2              error = i2c_write(dat);
+ 259   2              if(error) {
+ 260   3                  i2c_stop();
+ 261   3                  delay(1);
+ 262   3                  retry++;
+ 263   3                  continue;
+ 264   3              }
+ 265   2              
+ 266   2              i2c_stop();
+ 267   2              delay(5);
+ 268   2              break;
+ 269   2              
+ 270   2          } while(retry < 3);
+ 271   1      }
+ 272          
+ 273          unsigned char eeprom_read(unsigned int addr)
+ 274          {
+ 275   1          unsigned char dat = 0xFF;
+ 276   1          unsigned char error;
+ 277   1          unsigned char retry = 0;
+ 278   1          
+ 279   1          do {
+ 280   2              i2c_start();
+ 281   2              error = i2c_write(EEPROM_ADDR_WRITE);
+ 282   2              if(error) {
+ 283   3                  i2c_stop();
+ 284   3                  delay(1);
+ 285   3                  retry++;
+ 286   3                  continue;
+ 287   3              }
+ 288   2              
+ 289   2              error = i2c_write((unsigned char)(addr >> 8));
+ 290   2              if(error) {
+ 291   3                  i2c_stop();
+ 292   3                  delay(1);
+ 293   3                  retry++;
+ 294   3                  continue;
+ 295   3              }
+ 296   2              
+ 297   2              error = i2c_write((unsigned char)(addr & 0xFF));
+ 298   2              if(error) {
+ 299   3                  i2c_stop();
+ 300   3                  delay(1);
+ 301   3                  retry++;
+ 302   3                  continue;
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 6   
+
+ 303   3              }
+ 304   2              
+ 305   2              i2c_start();
+ 306   2              error = i2c_write(EEPROM_ADDR_READ);
+ 307   2              if(error) {
+ 308   3                  i2c_stop();
+ 309   3                  delay(1);
+ 310   3                  retry++;
+ 311   3                  continue;
+ 312   3              }
+ 313   2              
+ 314   2              dat = i2c_read(0);
+ 315   2              i2c_stop();
+ 316   2              break;
+ 317   2              
+ 318   2          } while(retry < 3);
+ 319   1          
+ 320   1          return dat;
+ 321   1      }
+ 322          
+ 323          /* ============================================================
+ 324             RTC FUNCTIONS (DS1307)
+ 325             ============================================================ */
+ 326          
+ 327          unsigned char bcd_to_decimal(unsigned char bcd)
+ 328          {
+ 329   1          return ((bcd >> 4) * 10) + (bcd & 0x0F);
+ 330   1      }
+ 331          
+ 332          void rtc_read_time(unsigned char *hours, unsigned char *minutes, unsigned char *seconds)
+ 333          {
+ 334   1          i2c_start();
+ 335   1          i2c_write(RTC_ADDR_WRITE);
+ 336   1          i2c_write(0x00);
+ 337   1          i2c_start();
+ 338   1          i2c_write(RTC_ADDR_READ);
+ 339   1          
+ 340   1          *seconds = bcd_to_decimal(i2c_read(1));
+ 341   1          *minutes = bcd_to_decimal(i2c_read(1));
+ 342   1          *hours = bcd_to_decimal(i2c_read(0) & 0x3F);
+ 343   1          
+ 344   1          i2c_stop();
+ 345   1      }
+ 346          
+ 347          void rtc_read_date(unsigned char *day, unsigned char *month, unsigned char *year)
+ 348          {
+ 349   1          i2c_start();
+ 350   1          i2c_write(RTC_ADDR_WRITE);
+ 351   1          i2c_write(0x04);
+ 352   1          i2c_start();
+ 353   1          i2c_write(RTC_ADDR_READ);
+ 354   1          
+ 355   1          *day = bcd_to_decimal(i2c_read(1));
+ 356   1          *month = bcd_to_decimal(i2c_read(1));
+ 357   1          *year = bcd_to_decimal(i2c_read(0));
+ 358   1          
+ 359   1          i2c_stop();
+ 360   1      }
+ 361          
+ 362          /* ============================================================
+ 363             UPDATE LCD - MONITORING MODE
+ 364             ============================================================ */
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 7   
+
+ 365          
+ 366          void update_lcd(void)
+ 367          {
+ 368   1          if(current_mode == 0)
+ 369   1          {
+ 370   2              lcd_cmd(0x80);
+ 371   2              lcd_string("TEMP: ");
+ 372   2              display_temperature(temperature);
+ 373   2              lcd_data(223);
+ 374   2              lcd_data('C');
+ 375   2              lcd_string("   ");
+ 376   2              
+ 377   2              lcd_cmd(0xC0);
+ 378   2              if(system_state == 0)
+ 379   2                  lcd_string("STATUS: SAFE     ");
+ 380   2              else if(system_state == 1)
+ 381   2                  lcd_string("STATUS: WARNING  ");
+ 382   2              else
+ 383   2                  lcd_string("STATUS: SHUTDOWN ");
+ 384   2          }
+ 385   1      }
+ 386          
+ 387          /* ============================================================
+ 388             EVENT LOGGING FUNCTIONS
+ 389             ============================================================ */
+ 390          
+ 391          void log_event(unsigned int temp, unsigned char state)
+ 392          {
+ 393   1          unsigned int addr;
+ 394   1          unsigned char hours, minutes, seconds;
+ 395   1          unsigned char day, month, year;
+ 396   1          unsigned char count;
+ 397   1          
+ 398   1          rtc_read_time(&hours, &minutes, &seconds);
+ 399   1          rtc_read_date(&day, &month, &year);
+ 400   1          
+ 401   1          count = eeprom_read(0x0000);
+ 402   1          event_count = count;
+ 403   1          
+ 404   1          addr = 0x0010 + (count * 8);
+ 405   1          
+ 406   1          if(count >= 62)
+ 407   1          {
+ 408   2              count = 0;
+ 409   2              addr = 0x0010;
+ 410   2          }
+ 411   1          
+ 412   1          eeprom_write(addr, (unsigned char)(temp & 0xFF));
+ 413   1          eeprom_write(addr + 1, (unsigned char)(temp >> 8));
+ 414   1          eeprom_write(addr + 2, state);
+ 415   1          eeprom_write(addr + 3, seconds);
+ 416   1          eeprom_write(addr + 4, minutes);
+ 417   1          eeprom_write(addr + 5, hours);
+ 418   1          eeprom_write(addr + 6, day);
+ 419   1          eeprom_write(addr + 7, month);
+ 420   1          
+ 421   1          count++;
+ 422   1          eeprom_write(0x0000, count);
+ 423   1          event_count = count;
+ 424   1      }
+ 425          
+ 426          /* ============================================================
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 8   
+
+ 427             DISPLAY EVENTS FUNCTION - WITH COUNT WINDOW
+ 428             ============================================================ */
+ 429          
+ 430          void display_events(void)
+ 431          {
+ 432   1          unsigned char count, state, s, m, h, d, mo;
+ 433   1          unsigned int addr, temp;
+ 434   1          unsigned char idx;
+ 435   1          unsigned int timer;
+ 436   1          unsigned char temp_low, temp_high;
+ 437   1          unsigned char yr = 26;  // Default year
+ 438   1          
+ 439   1          count = eeprom_read(0x0000);
+ 440   1          
+ 441   1          // Show LOGS MODE message
+ 442   1          lcd_clear();
+ 443   1          lcd_cmd(0x80);
+ 444   1          lcd_string("<<< LOGS MODE >>>");
+ 445   1          lcd_cmd(0xC0);
+ 446   1          lcd_string("Hold to view logs");
+ 447   1          delay(1500);
+ 448   1          
+ 449   1          if(count == 0)
+ 450   1          {
+ 451   2              lcd_clear();
+ 452   2              lcd_cmd(0x80);
+ 453   2              lcd_string("No Events Logged");
+ 454   2              lcd_cmd(0xC0);
+ 455   2              lcd_string("Release to exit");
+ 456   2              
+ 457   2              while(BTN_VIEW == 0)
+ 458   2                  delay(10);
+ 459   2              return;
+ 460   2          }
+ 461   1          
+ 462   1          // Show Event Count Window
+ 463   1          lcd_clear();
+ 464   1          lcd_cmd(0x80);
+ 465   1          lcd_string("Total Events: ");
+ 466   1          display_number(count);
+ 467   1          lcd_cmd(0xC0);
+ 468   1          lcd_string("Hold to view logs");
+ 469   1          delay(1500);
+ 470   1          
+ 471   1          if(BTN_VIEW == 1)
+ 472   1              return;
+ 473   1          
+ 474   1          idx = 0;
+ 475   1          display_events_active = 1;
+ 476   1          
+ 477   1          while(display_events_active)
+ 478   1          {
+ 479   2              if(BTN_VIEW == 1)
+ 480   2              {
+ 481   3                  display_events_active = 0;
+ 482   3                  break;
+ 483   3              }
+ 484   2              
+ 485   2              addr = 0x0010 + ((count - 1 - idx) * 8);
+ 486   2              
+ 487   2              temp_low = eeprom_read(addr);
+ 488   2              temp_high = eeprom_read(addr + 1);
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 9   
+
+ 489   2              temp = (temp_high << 8) | temp_low;
+ 490   2              state = eeprom_read(addr + 2);
+ 491   2              s = eeprom_read(addr + 3);
+ 492   2              m = eeprom_read(addr + 4);
+ 493   2              h = eeprom_read(addr + 5);
+ 494   2              d = eeprom_read(addr + 6);
+ 495   2              mo = eeprom_read(addr + 7);
+ 496   2              
+ 497   2              lcd_clear();
+ 498   2              
+ 499   2              // Line 1: Event # and Temperature
+ 500   2              lcd_cmd(0x80);
+ 501   2              lcd_string("#");
+ 502   2              display_number(idx + 1);
+ 503   2              lcd_string(": ");
+ 504   2              lcd_string("TEMP:");
+ 505   2              display_temperature(temp);
+ 506   2              lcd_data(223);
+ 507   2              lcd_data('C');
+ 508   2              lcd_string(" ");
+ 509   2              
+ 510   2              // Show status abbreviation
+ 511   2              if(state == 0) lcd_string("SAFE");
+ 512   2              else if(state == 1) lcd_string("WARN");
+ 513   2              else lcd_string("STOP");
+ 514   2              
+ 515   2              // Line 2: Time and Date
+ 516   2              lcd_cmd(0xC0);
+ 517   2              lcd_string("T:");
+ 518   2              display_number(h);
+ 519   2              lcd_data(':');
+ 520   2              display_number(m);
+ 521   2              lcd_string(" D:");
+ 522   2              display_number(d);
+ 523   2              lcd_data('/');
+ 524   2              display_number(mo);
+ 525   2              lcd_data('/');
+ 526   2              lcd_data('2');
+ 527   2              lcd_data('0');
+ 528   2              display_number(yr);
+ 529   2              
+ 530   2              // 3 second delay for each log
+ 531   2              timer = 0;
+ 532   2              while(timer < 3000)
+ 533   2              {
+ 534   3                  delay(10);
+ 535   3                  timer += 10;
+ 536   3                  
+ 537   3                  if(BTN_VIEW == 1)
+ 538   3                  {
+ 539   4                      display_events_active = 0;
+ 540   4                      break;
+ 541   4                  }
+ 542   3              }
+ 543   2              
+ 544   2              idx++;
+ 545   2              if(idx >= count)
+ 546   2                  idx = 0;
+ 547   2          }
+ 548   1      }
+ 549          
+ 550          /* ============================================================
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 10  
+
+ 551             BUTTON CHECK FUNCTION
+ 552             ============================================================ */
+ 553          
+ 554          void check_button(void)
+ 555          {
+ 556   1          static unsigned char last_state = 1;
+ 557   1          static unsigned int hold_counter = 0;
+ 558   1          unsigned char current_state;
+ 559   1          
+ 560   1          current_state = BTN_VIEW;
+ 561   1          
+ 562   1          if(current_state == 0)
+ 563   1          {
+ 564   2              if(last_state == 1)
+ 565   2              {
+ 566   3                  hold_counter = 0;
+ 567   3                  button_was_pressed = 1;
+ 568   3              }
+ 569   2              
+ 570   2              hold_counter++;
+ 571   2              
+ 572   2              if(hold_counter >= 30 && current_mode == 0)
+ 573   2              {
+ 574   3                  current_mode = 1;
+ 575   3                  
+ 576   3                  // Enter LOGS MODE - Display count then logs
+ 577   3                  display_events();
+ 578   3                  
+ 579   3                  // Exit LOGS MODE - Show MONITORING MODE message
+ 580   3                  current_mode = 0;
+ 581   3                  lcd_clear();
+ 582   3                  lcd_cmd(0x80);
+ 583   3                  lcd_string("<<< MONITORING >>>");
+ 584   3                  lcd_cmd(0xC0);
+ 585   3                  lcd_string("Mode");
+ 586   3                  delay(1500);
+ 587   3                  lcd_clear();
+ 588   3                  update_lcd();
+ 589   3              }
+ 590   2          }
+ 591   1          else
+ 592   1          {
+ 593   2              if(button_was_pressed == 1)
+ 594   2              {
+ 595   3                  button_was_pressed = 0;
+ 596   3                  display_events_active = 0;
+ 597   3              }
+ 598   2              hold_counter = 0;
+ 599   2          }
+ 600   1          
+ 601   1          last_state = current_state;
+ 602   1      }
+ 603          
+ 604          /* ============================================================
+ 605             SHOW WELCOME MESSAGE (NO LAST EVENT)
+ 606             ============================================================ */
+ 607          
+ 608          void show_welcome(void)
+ 609          {
+ 610   1          unsigned char hours, minutes, seconds;
+ 611   1          unsigned char day, month, year;
+ 612   1          
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 11  
+
+ 613   1          lcd_clear();
+ 614   1          lcd_cmd(0x80);
+ 615   1          lcd_string("Overheat System");
+ 616   1          lcd_cmd(0xC0);
+ 617   1          lcd_string("v5.0 Ready...");
+ 618   1          delay(1500);
+ 619   1          lcd_clear();
+ 620   1          
+ 621   1          // Show current time and date
+ 622   1          rtc_read_time(&hours, &minutes, &seconds);
+ 623   1          rtc_read_date(&day, &month, &year);
+ 624   1          
+ 625   1          lcd_cmd(0x80);
+ 626   1          lcd_string("Time: ");
+ 627   1          display_number(hours);
+ 628   1          lcd_data(':');
+ 629   1          display_number(minutes);
+ 630   1          lcd_data(':');
+ 631   1          display_number(seconds);
+ 632   1          
+ 633   1          lcd_cmd(0xC0);
+ 634   1          lcd_string("Date: ");
+ 635   1          display_number(day);
+ 636   1          lcd_data('/');
+ 637   1          display_number(month);
+ 638   1          lcd_data('/');
+ 639   1          lcd_data('2');
+ 640   1          lcd_data('0');
+ 641   1          display_number(year);
+ 642   1          delay(2000);
+ 643   1          lcd_clear();
+ 644   1          
+ 645   1          // Show threshold values (NO LAST EVENT)
+ 646   1          lcd_cmd(0x80);
+ 647   1          lcd_string("W:");
+ 648   1          display_temperature(WARNING_TEMP);
+ 649   1          lcd_data(223);
+ 650   1          lcd_data('C');
+ 651   1          lcd_string(" C:");
+ 652   1          display_temperature(CRITICAL_TEMP);
+ 653   1          lcd_data(223);
+ 654   1          lcd_data('C');
+ 655   1          lcd_cmd(0xC0);
+ 656   1          lcd_string("Hold VIEW for logs");
+ 657   1          delay(1500);
+ 658   1          lcd_clear();
+ 659   1      }
+ 660          
+ 661          /* ============================================================
+ 662             OPERATION FUNCTIONS
+ 663             ============================================================ */
+ 664          
+ 665          void safe_operation(void)
+ 666          {
+ 667   1          system_state = 0;
+ 668   1          LED = 0;
+ 669   1          BUZZER = 0;
+ 670   1          RELAY = RELAY_ON;
+ 671   1      }
+ 672          
+ 673          void warning_operation(void)
+ 674          {
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 12  
+
+ 675   1          system_state = 1;
+ 676   1          RELAY = RELAY_ON;
+ 677   1          
+ 678   1          blink_timer++;
+ 679   1          if(blink_timer % 10 < 5)
+ 680   1          {
+ 681   2              LED = 1;
+ 682   2              BUZZER = 1;
+ 683   2          }
+ 684   1          else
+ 685   1          {
+ 686   2              LED = 0;
+ 687   2              BUZZER = 0;
+ 688   2          }
+ 689   1      }
+ 690          
+ 691          void critical_operation(void)
+ 692          {
+ 693   1          system_state = 2;
+ 694   1          RELAY = RELAY_OFF;
+ 695   1          
+ 696   1          blink_timer++;
+ 697   1          if(blink_timer % 4 < 2)
+ 698   1          {
+ 699   2              LED = 1;
+ 700   2              BUZZER = 1;
+ 701   2          }
+ 702   1          else
+ 703   1          {
+ 704   2              LED = 0;
+ 705   2              BUZZER = 0;
+ 706   2          }
+ 707   1      }
+ 708          
+ 709          /* ============================================================
+ 710             MAIN FUNCTION
+ 711             ============================================================ */
+ 712          
+ 713          void main(void)
+ 714          {
+ 715   1          unsigned char adc;
+ 716   1          unsigned int temp;
+ 717   1          unsigned char prev_state = 2;
+ 718   1          unsigned int loop_counter = 0;
+ 719   1          
+ 720   1          RELAY = RELAY_ON;
+ 721   1          LED = 0;
+ 722   1          BUZZER = 0;
+ 723   1          
+ 724   1          lcd_init();
+ 725   1          
+ 726   1          // Show welcome message (NO LAST EVENT)
+ 727   1          show_welcome();
+ 728   1          
+ 729   1          current_mode = 0;
+ 730   1          
+ 731   1          while(1)
+ 732   1          {
+ 733   2              check_button();
+ 734   2              
+ 735   2              if(current_mode == 1)
+ 736   2                  continue;
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 13  
+
+ 737   2              
+ 738   2              adc = ADC_Read();
+ 739   2              temp = ((unsigned int)adc * 500) / 255;
+ 740   2              temperature = temp;
+ 741   2              
+ 742   2              loop_counter++;
+ 743   2              if(loop_counter >= 5)
+ 744   2              {
+ 745   3                  update_lcd();
+ 746   3                  loop_counter = 0;
+ 747   3              }
+ 748   2              
+ 749   2              if(temp < WARNING_TEMP)
+ 750   2              {
+ 751   3                  if(prev_state != 0)
+ 752   3                  {
+ 753   4                      prev_state = 0;
+ 754   4                      safe_operation();
+ 755   4                      update_lcd();
+ 756   4                  }
+ 757   3                  else
+ 758   3                  {
+ 759   4                      safe_operation();
+ 760   4                  }
+ 761   3              }
+ 762   2              else if(temp < CRITICAL_TEMP)
+ 763   2              {
+ 764   3                  if(prev_state != 1)
+ 765   3                  {
+ 766   4                      prev_state = 1;
+ 767   4                      warning_operation();
+ 768   4                      update_lcd();
+ 769   4                  }
+ 770   3                  else
+ 771   3                  {
+ 772   4                      warning_operation();
+ 773   4                  }
+ 774   3              }
+ 775   2              else
+ 776   2              {
+ 777   3                  if(prev_state != 2)
+ 778   3                  {
+ 779   4                      prev_state = 2;
+ 780   4                      critical_operation();
+ 781   4                      update_lcd();
+ 782   4                      
+ 783   4                      log_event(temp, 2);
+ 784   4                      
+ 785   4                      lcd_clear();
+ 786   4                      lcd_cmd(0x80);
+ 787   4                      lcd_string("EVENT LOGGED!");
+ 788   4                      lcd_cmd(0xC0);
+ 789   4                      lcd_string("Temp: ");
+ 790   4                      display_temperature(temp);
+ 791   4                      lcd_data(223);
+ 792   4                      lcd_data('C');
+ 793   4                      lcd_string(" SHUTDOWN");
+ 794   4                      delay(1000);
+ 795   4                      update_lcd();
+ 796   4                  }
+ 797   3                  else
+ 798   3                  {
+C51 COMPILER V9.60.7.0   MAIN                                                              07/02/2026 22:27:55 PAGE 14  
+
+ 799   4                      critical_operation();
+ 800   4                  }
+ 801   3              }
+ 802   2              
+ 803   2              delay(5);
+ 804   2          }
+ 805   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   2199    ----
+   CONSTANT SIZE    =    309    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     12      67
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
